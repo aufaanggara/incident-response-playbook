@@ -1,0 +1,206 @@
+playbook:
+  title: "Incident Response Playbook — SSH Brute Force Attack"
+  scenario_id: "scenario-01-bruteforce"
+  version: "1.0"
+  last_updated: "2026-10-15"
+
+  overview:
+    description: >
+      Playbook ini mendokumentasikan proses deteksi, analisis, dan respons
+      terhadap serangan SSH brute force yang menargetkan akun valid maupun
+      akun non-existent, disimulasikan pada lab home-SOC berbasis Wazuh.
+    objective: >
+      Menguji dan mendokumentasikan siklus penuh Incident Response
+      (Detection -> Analysis -> Containment -> Eradication -> Recovery)
+      terhadap simulasi brute force SSH, sekaligus memvalidasi efektivitas
+      rule detection dan active response yang telah dikonfigurasi.
+    mitre_attack:
+      - id: "T1595"
+        name: "Active Scanning"
+        phase: "Reconnaissance"
+      - id: "T1110.001"
+        name: "Brute Force: Password Guessing"
+        phase: "Credential Access"
+      - id: "T1078"
+        name: "Valid Accounts"
+        phase: "Initial Access / Persistence"
+
+  environment:
+    attacker:
+      hostname: "kali-linux-2025.4-virtualbox-amd64"
+      ip: "192.168.56.102"
+      tools: ["nmap", "hydra"]
+    victim:
+      hostname: "endpoint-linux-waz-plunk"
+      ip: "192.168.56.106"
+      os: "Ubuntu 24.04.4 LTS"
+      exposed_service: "SSH (port 22, OpenSSH 9.6p1)"
+    monitoring:
+      hostname: "wazuh-server"
+      ip: "192.168.56.104"
+      version: "Wazuh v4.14.6"
+      network_mode: ["NAT", "Host-Only Adapter"]
+
+  detection_rules:
+    - rule_id: 100002
+      level: 10
+      type: "custom"
+      description: "SSH brute force attempt: multiple non-existent user login failures detected."
+      condition: "frequency=5 failed logins within timeframe=120s, if_matched_sid=5710"
+      active_response:
+        command: "firewall-drop"
+        location: "defined-agent"
+        timeout_seconds: 600
+    - rule_id: 40112
+      level: 12
+      type: "built-in"
+      description: "Multiple authentication failures followed by a success."
+      note: >
+        Rule ini melengkapi gap dari rule 100002 — rule 100002 tidak
+        mendeteksi brute force terhadap username yang VALID (bukan
+        non-existent user), sehingga rule bawaan 40112 menjadi penutup
+        celah deteksi untuk kasus ini.
+
+  phases:
+    - phase: "1. Reconnaissance"
+      folder: "attack/"
+      steps:
+        - action: "Port & service scanning terhadap victim"
+          command: "nmap -sV -sC -F 192.168.56.106"
+          result: "Hanya port 22/tcp (SSH, OpenSSH 9.6p1) terbuka — attack surface tunggal."
+          evidence: "00-nmap-scan-victim"
+
+    - phase: "2. Preparation (Wordlist)"
+      folder: "attack/"
+      steps:
+        - action: "Membuat wordlist username"
+          method: "heredoc (cat << EOF)"
+          strategy: >
+            Username valid ('endpoint') ditaruh di posisi PERTAMA untuk
+            menghindari IP attacker ter-block (via rule 100002, trigger dari
+            username non-existent) sebelum sempat mencoba username valid.
+          evidence: "01-buat-wordlist-username"
+        - action: "Membuat wordlist password"
+          method: "heredoc (cat << EOF)"
+          strategy: >
+            Password valid ditaruh di posisi ke-4 dari 6 — memberi jarak
+            aman dari rule threshold (frequency=5) sekaligus tetap realistis
+            (beberapa percobaan gagal sebelum berhasil).
+          evidence: "02-buat-wordlist-password"
+
+    - phase: "3. Exploitation (Brute Force)"
+      folder: "attack/"
+      steps:
+        - action: "Eksekusi brute force SSH via Hydra"
+          command: "hydra -L endpointUser.txt -P endpointPass.txt ssh://192.168.56.106 -t 4 -o /home/kali/hydra-output.txt"
+          note: >
+            Tanpa flag -f (stop-on-success), sehingga Hydra melanjutkan
+            percobaan ke username lain (non-existent) setelah berhasil
+            login, memicu rule 100002 sekaligus active response.
+          result: "Login berhasil pada akun 'endpoint' dengan password valid."
+          evidence: "03-hydra-bruteforce-execution"
+
+    - phase: "4. Detection & Analysis"
+      folder: "detection/"
+      steps:
+        - action: "Baseline dashboard sebelum serangan"
+          result: "0 authentication failure, kondisi normal."
+          evidence: "00-dashboard-sebelum-serangan"
+        - action: "Dashboard setelah serangan"
+          result: "Authentication failure naik 0 -> 66, authentication success 10 -> 11, 1 alert level 12+."
+          evidence: "01-dashboard-setelah-serangan"
+        - action: "Identifikasi alert rule 40112 (fail->success correlation)"
+          result: "Rule 40112 terkonfirmasi trigger — brute force berujung login sukses."
+          evidence: "02-alert-rule40112-bruteforce-success"
+        - action: "Identifikasi alert rule 100002 (non-existent user)"
+          result: "Rule 100002 terkonfirmasi trigger 7x dari percobaan username fiktif (root/admin/user/test)."
+          evidence: "03-alert-rule100002-nonexistent-user"
+
+    - phase: "5. Root Cause Analysis (Active Response Troubleshooting)"
+      folder: "response/"
+      note: >
+        Pada eksekusi awal, active response (firewall-drop) TIDAK berjalan
+        meskipun rule terdeteksi. Ditemukan 3 masalah berlapis akibat
+        lab tidak aktif selama ~2 bulan:
+      findings:
+        - issue: "wazuh-manager service berstatus failed (timeout)"
+          root_cause: "Proses lama tidak mati sempurna setelah idle lama, systemd gagal restart bersih."
+          fix: "systemctl stop + pkill -9 -f wazuh + systemctl start, dilanjutkan wazuh-control restart."
+          evidence: ["03-root-cause-wazuh-manager-failed", "05-wazuh-manager-stop-pkill-start", "06-wazuh-manager-status-fresh-running"]
+        - issue: "wazuh-indexer mati (signal KILL) akibat collateral dari 'pkill -9 -f wazuh'"
+          root_cause: "Pattern pkill terlalu luas, ikut mematikan proses indexer yang independen."
+          fix: "systemctl restart wazuh-indexer"
+          evidence: "07-wazuh-indexer-restart-success"
+        - issue: "Active response tidak terkirim ke agent yang benar"
+          root_cause: >
+            Hostname endpoint berubah dari 'endpoint-linux-wazuh' menjadi
+            'endpoint-linux-waz-plunk', menyebabkan Wazuh meregistrasi agent
+            baru dengan ID 002 — sementara config active-response masih
+            menunjuk ke agent_id lama (001), sehingga command firewall-drop
+            tidak pernah sampai ke agent yang aktif.
+          fix: "Update <agent_id> di ossec.conf dari 001 ke 002, lalu wazuh-control restart."
+          evidence: ["08-root-cause-agent-id-mismatch", "09-restart-manager-setelah-fix-agentid"]
+      lesson_learned: >
+        Perubahan identitas aset (hostname) dapat secara diam-diam memutus
+        mapping active-response tanpa error yang jelas di level rule/config
+        dasar. Perlu validasi ulang agent_id setiap kali ada perubahan
+        hostname/re-enrollment, dan hindari pkill dengan pattern terlalu luas.
+
+    - phase: "6. Containment"
+      folder: "response/"
+      steps:
+        - action: "Verifikasi active response berfungsi (post-fix)"
+          result: "IP attacker (192.168.56.102) 100% packet loss saat ping — confirmed blocked."
+          evidence: "10-ping-test-ip-blocked-confirmed"
+        - action: "Verifikasi rule firewall di endpoint"
+          command: "sudo iptables -L -n | grep 192.168.56.102"
+          result: "2 rule DROP ditemukan untuk IP attacker."
+          evidence: "11-iptables-rule-drop-confirmed"
+        - action: "Verifikasi log active-response"
+          result: "Entry baru dengan status 'continue' (bukan 'Aborted'), agent.id: 002."
+          evidence: "12-active-response-log-success"
+        - action: "Deteksi sesi aktif pada akun yang kompromi (endpoint)"
+          command: "who / w"
+          result: "Ditemukan sesi SSH aktif dari IP attacker (192.168.56.102, pts/1)."
+          evidence: "13-sesi-aktif-attacker-terdeteksi"
+        - action: "Memutus sesi aktif attacker"
+          command: "sudo kill -9 [PID sshd attacker]"
+          evidence: "14-kill-sesi-attacker-pts1"
+        - action: "Verifikasi sesi attacker terputus"
+          result: "Hanya tersisa sesi legitimate (host Windows via pts/0, console tty1)."
+          evidence: "15-verifikasi-sesi-attacker-terputus"
+        - action: "Reset password akun yang kompromi"
+          command: "sudo passwd endpoint"
+          result: "Password berhasil diperbarui."
+          evidence: "16-reset-password-akun-endpoint"
+
+    - phase: "7. Eradication & Audit"
+      folder: "response/"
+      steps:
+        - action: "Audit riwayat command (post-incident)"
+          command: "cat ~/.bash_history / tail -10 ~/.bash_history"
+          result: >
+            Tidak ditemukan command destruktif/backdoor. Command yang tercatat
+            bersifat reconnaissance (cat /etc/passwd, whoami, id, sudo -l, sudo -i).
+          limitation: >
+            .bash_history tidak menyimpan timestamp maupun identitas
+            per-baris command, sehingga sulit membedakan command dari
+            attacker vs. command dari analyst saat sesi dipakai bergantian.
+            Rekomendasi: aktifkan HISTTIMEFORMAT, auditd, atau session
+            recording (script/ttyrec) untuk audit trail yang lebih kuat.
+          evidence: "17-audit-bash-history-attacker-activity"
+
+    - phase: "8. Recovery"
+      folder: "response/"
+      status: "pending"
+      planned_steps:
+        - "Verifikasi tidak ada perubahan file/sistem mencurigakan (file integrity check)"
+        - "Pastikan akun endpoint kembali bisa diakses normal dengan kredensial baru"
+        - "Dokumentasikan timeline lengkap incident sebagai bagian lessons learned"
+
+  lessons_learned:
+    - "Rule custom berbasis non-existent user tidak otomatis mencakup brute force terhadap akun valid — perlu rule pelengkap (built-in correlation rule)."
+    - "Infrastruktur monitoring yang idle lama (2 bulan) rentan terhadap state yang tidak konsisten (service failed, proses zombie) dan perlu di-verifikasi ulang sebelum dipakai untuk pengujian."
+    - "Perubahan hostname/identitas aset dapat memutus mapping active-response secara diam-diam tanpa error eksplisit."
+    - "Command pkill dengan pattern luas (-f wazuh) berisiko mematikan service independen yang tidak dimaksud."
+    - "Audit trail berbasis .bash_history memiliki keterbatasan signifikan (no timestamp, no user separation) untuk forensik multi-user."
