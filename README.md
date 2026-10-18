@@ -1,74 +1,66 @@
-# Incident Report — SSH Brute Force Attack (Home Lab)
+# Incident Response Playbook — Home Lab
 
-**Date:** 2026-10-14 to 2026-10-15
-**Platform:** Self-built Home Lab (VirtualBox + Wazuh SIEM/EDR)
-**Difficulty:** Medium
-**Category:** Intrusion / Brute Force / Active Response Troubleshooting
-**Analyst:** Project owner (self-directed)
+A self-built home lab project simulating end-to-end incident response workflows (Detection → Analysis → Containment → Eradication → Recovery) using Wazuh SIEM/EDR and Suricata IDS, built and documented as a hands-on blue team portfolio.
 
 ---
 
-## Navigation
+## Project Structure
 
-| # | Document | Content |
-|---|----------|---------|
-| 1 | [01-reconnaissance-and-setup.md](./01-reconnaissance-and-setup.md) | Lab environment, topology, reconnaissance (Nmap) |
-| 2 | [02-exploitation.md](./02-exploitation.md) | Wordlist strategy, SSH brute force execution (Hydra) |
-| 3 | [03-detection-and-analysis.md](./03-detection-and-analysis.md) | Detection rules, alert analysis, before/after comparison |
-| 4 | [04-root-cause-and-remediation.md](./04-root-cause-and-remediation.md) | Active response troubleshooting, containment, audit |
-
----
-
-## Executive Summary
-
-A simulated SSH brute force attack was conducted against a Linux endpoint monitored by a self-hosted Wazuh SIEM in a controlled home lab environment. The attacker successfully authenticated to a valid account (`endpoint`) after a deliberately staged series of failed login attempts. Wazuh's correlation engine correctly detected the attack pattern (multiple failures followed by a success, and multiple non-existent-user failures), but the automated containment action (firewall block) initially failed to execute due to infrastructure issues stemming from the lab being idle for roughly two months. Root cause analysis identified three compounding issues: a stalled manager service, a collateral service shutdown, and a stale agent ID mapping caused by a hostname change. After remediation, the full detection-to-containment cycle was re-validated successfully: the attacker's IP was blocked at the firewall level, the compromised session was terminated, and the compromised account's password was reset.
-
----
-
-## Indicators of Compromise (IOC)
-
-| Type | Value | Notes |
-|---|---|---|
-| Source IP (Attacker) | `192.168.56.102` | Kali Linux VM used for scanning and brute force |
-| Target IP (Victim) | `192.168.56.106` | Ubuntu 24.04.4 LTS endpoint, SSH exposed |
-| Target Service | SSH (port 22), OpenSSH 9.6p1 Ubuntu 3ubuntu13.18 | Sole exposed service confirmed via Nmap |
-| Compromised Account | `endpoint` | Valid local account on victim host |
-| Attack Tool | `hydra v9.6` | Used for credential brute forcing |
-| Malicious Usernames Attempted | `root`, `admin`, `user`, `test` | Non-existent accounts, triggered correlation rule 100002 |
-
-> Note: the specific password value used in the wordlist and subsequently compromised is intentionally omitted from this report (credential hygiene), even though this is an isolated lab environment.
+```
+incident-response-playbook/
+├── README.md                          ← you are here
+├── SOP-startup-troubleshooting.md     ← operational checklist, read before starting any lab session
+├── writeup/                           ← incident reports (per scenario, portfolio-ready)
+│   ├── README.md                      ← Scenario 1 report index
+│   ├── 01-reconnaissance-and-setup.md
+│   ├── 02-exploitation.md
+│   ├── 03-detection-and-analysis.md
+│   └── 04-root-cause-and-remediation.md
+├── playbooks/                         ← structured YAML playbooks (reusable SOP format)
+│   └── playbook-bruteforce.yml
+└── docs/                              ← raw evidence (screenshots), organized per scenario
+    ├── setup/
+    ├── scenario-01-bruteforce/
+    └── scenario-02-webapp/
+```
 
 ---
 
-## Timeline of Events (High Level)
+## Scenarios
 
-| Timestamp (local) | Event |
+| # | Scenario | Attack Vector | Status | Report |
+|---|---|---|---|---|
+| 1 | SSH Brute Force | Credential brute forcing (Hydra) against SSH | ✅ Complete | [writeup/README.md](./writeup/README.md) |
+| 2 | Web Application Attack | SQL Injection / webshell upload (Metasploitable2 + Suricata) | 🔄 In progress | — |
+| 3 | Simulated Ransomware/Malware | Safe sample execution, containment & recovery focus | ⏳ Planned | — |
+
+---
+
+## Lab Environment Overview
+
+| Role | Notes |
 |---|---|
-| 2026-07-27/28 | Initial Wazuh agent enrollment (previous project session), agent registered as `endpoint-linux-wazuh` (ID 001) |
-| 2026-07-30 | Prior active-response testing performed successfully (historical baseline) |
-| ~2026-07-30 to 2026-10-14 | Lab left idle (~2 months) |
-| 2026-10-14 05:33 | Lab VMs restarted; agent re-enrolled under new hostname `endpoint-linux-waz-plunk` (ID 002) |
-| 2026-10-14 ~10:37 | Nmap reconnaissance performed against victim |
-| 2026-10-14 ~10:37 | Hydra brute force executed; valid login achieved on account `endpoint` |
-| 2026-10-14 | Detection confirmed: rule 40112 (fail→success) and rule 100002 (non-existent user) both triggered; active response **did not execute** |
-| 2026-10-15 05:33–06:19 | Root cause investigation: `wazuh-manager` found in failed state; `wazuh-indexer` found killed; both restarted |
-| 2026-10-15 06:1x | Root cause identified: `agent_id` in active-response config (001) did not match actual registered agent ID (002) |
-| 2026-10-15 06:19 | `ossec.conf` updated (`agent_id` 001 → 002); manager restarted |
-| 2026-10-15 06:41 | Brute force re-executed; active response (`firewall-drop`) confirmed executing successfully |
-| 2026-10-15 ~08:48–08:56 | Active attacker session on compromised account identified, terminated, password reset |
+| Attacker | Kali Linux |
+| Victim(s) | Vary per scenario — Linux endpoint (Scenario 1), Metasploitable2 (Scenario 2) |
+| Monitoring | Wazuh Manager/Indexer/Dashboard (SIEM/EDR), Suricata (network IDS, Scenario 2 onward) |
+| Networking | VirtualBox Host-Only Adapter (inter-VM, isolated) + NAT (per-VM internet access) |
 
-Full step-by-step detail with evidence is documented in the linked phase files above.
+All VMs run on VirtualBox on a local Windows host. Full topology and per-scenario environment details are documented in each scenario's writeup.
 
 ---
 
-## Key Findings (Highlights)
+## Before Starting Any Session
 
-- Reconnaissance confirmed a single attack surface: SSH (port 22).
-- Wazuh's built-in correlation rule (ID 40112) detected the brute-force-to-success pattern even though the custom rule (ID 100002) was scoped only to non-existent-user failures — a useful detection coverage overlap.
-- The custom rule (ID 100002) does **not** cover brute force against valid usernames — a detection gap identified during analysis.
-- Automated containment (active response) silently failed on first attempt due to **three compounding infrastructure issues** after prolonged lab inactivity, not a configuration logic error in the rule itself.
-- Root cause was ultimately traced to an **agent identity mismatch** caused by a hostname change, which desynced the active-response target (`agent_id`) from the actual registered agent.
-- After remediation, full containment was verified at multiple levels: network (ping test), firewall (iptables rule), and application log (`active-responses.log`).
-- Manual containment (session termination + password reset) was also demonstrated for the compromised account itself.
+This lab is not kept running continuously — VMs are started and stopped between sessions, which has previously caused several infrastructure issues (stalled services, stale agent mappings, lost network configuration) that were mistaken for attack-related anomalies before their real cause was found.
 
-See [04-root-cause-and-remediation.md](./04-root-cause-and-remediation.md) for full root cause analysis, remediation steps, and lessons learned.
+**Always run through [SOP-startup-troubleshooting.md](./SOP-startup-troubleshooting.md) first** before beginning a new scenario or resuming an existing one. It covers:
+- The correct VM startup order and post-boot verification checklist
+- Step-by-step troubleshooting for the specific failure modes already encountered in this lab (Wazuh manager/indexer failures, active-response not firing, Suricata not capturing third-party traffic, stuck processes, and more)
+
+Treating infrastructure health checks as a deliberate first step — rather than assuming the environment is ready — is itself part of the incident response discipline this project is meant to practice.
+
+---
+
+## Purpose
+
+This project exists to practice and document the full workflow of a SOC/blue team analyst end to end: executing a realistic attack scenario, detecting and analyzing it through a SIEM, investigating when automated response doesn't behave as expected, performing containment and remediation, and writing it all up as a professional incident report. The written reports under `writeup/` are the primary portfolio deliverable; the YAML playbooks under `playbooks/` are a reusable, structured summary of each scenario's response procedure.
