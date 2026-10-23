@@ -1,0 +1,174 @@
+playbook:
+  title: "Incident Response Playbook — Web Application Attack (SQLi + Webshell Upload)"
+  scenario_id: "scenario-02-webapp"
+  version: "1.0"
+  last_updated: "2026-10-22"
+
+  overview:
+    description: >
+      Playbook ini mendokumentasikan deteksi, analisis, dan respons terhadap
+      serangan aplikasi web (SQL Injection dan Webshell Upload) terhadap
+      DVWA yang berjalan di Metasploitable2, dimonitor via Suricata (network-based
+      IDS) yang terintegrasi ke Wazuh.
+    objective: >
+      Menguji kemampuan deteksi berbasis network (Suricata) terhadap serangan
+      web application, mengidentifikasi detection gap pada ruleset default,
+      membangun custom rule, dan menjalankan siklus containment-eradication
+      terhadap Remote Code Execution via webshell.
+    mitre_attack:
+      - id: "T1595"
+        name: "Active Scanning"
+        phase: "Reconnaissance"
+      - id: "T1190"
+        name: "Exploit Public-Facing Application"
+        phase: "Initial Access"
+      - id: "T1505.003"
+        name: "Web Shell"
+        phase: "Persistence"
+
+  environment:
+    attacker:
+      hostname: "kali-linux-2025.4-virtualbox-amd64"
+      ip: "192.168.56.102"
+    victim:
+      hostname: "metasploitable2"
+      ip: "192.168.56.112"
+      target_app: "DVWA (Damn Vulnerable Web Application) v1.0.7, security level: low"
+      web_server: "Apache httpd 2.2.8 (Ubuntu)"
+    monitoring:
+      - hostname: "wazuh-server"
+        ip: "192.168.56.104"
+        role: "SIEM manager/dashboard"
+      - hostname: "suricata-ids"
+        ip: "192.168.56.111"
+        role: "Network IDS, agent terintegrasi ke Wazuh (agent ID 003)"
+        detection_type: "network-based (berbeda dari skenario 1 yang host-based)"
+
+  detection_rules:
+    - type: "built-in (Emerging Threats)"
+      sid_range: "2020506-2020508 dkk"
+      description: "ET ATTACK_RESPONSE MySQL error in HTTP response (response-based SQLi detection)"
+      status: "berfungsi setelah fix EXTERNAL_NET"
+    - type: "custom"
+      sid: 9000001
+      description: "CUSTOM Possible Webshell Access in Upload Directory"
+      rule: >
+        alert http any any -> $HOME_NET any (msg:"CUSTOM Possible Webshell
+        Access in Upload Directory"; flow:established,to_server; http.uri;
+        content:"/uploads/"; content:".php"; distance:0;
+        classtype:web-application-attack; sid:9000001; rev:1;)
+      status: "berfungsi setelah file dipindah ke default-rule-path"
+
+  phases:
+    - phase: "1. Infrastructure Setup"
+      folder: "setup/"
+      summary: >
+        Install & konfigurasi Suricata di VM terpisah, integrasikan ke Wazuh
+        sebagai agent baru, validasi capture traffic pihak ketiga via
+        promiscuous mode.
+      key_issues_resolved:
+        - "Rules belum terdownload (suricata-update)"
+        - "Proses Suricata foreground ter-interrupt oleh terminal yang sama -> dijalankan sebagai systemd service"
+        - "Promiscuous mode VirtualBox 'Allow All' tidak otomatis aktif di level OS -> perlu 'ip link set promisc on' manual + systemd service permanen"
+        - "Agent lama (ID 001, hostname berubah) dihapus untuk kebersihan dashboard"
+
+    - phase: "2. Reconnaissance"
+      folder: "attack/"
+      steps:
+        - action: "Full port scan Metasploitable2"
+          command: "nmap -sV -sC -p- -T4 -oN nmap-metasploitable2-fullscan.txt 192.168.56.112"
+          result: "20+ port terbuka, termasuk port 80 (Apache, DVWA dkk)"
+        - action: "Enumerasi aplikasi web"
+          result: "5 aplikasi vulnerable ditemukan di landing page: TWiki, phpMyAdmin, Mutillidae, DVWA, WebDAV"
+        - action: "Login DVWA & set security level"
+          result: "Login admin/password berhasil; security level diubah dari high ke low"
+
+    - phase: "3. Exploitation — SQL Injection"
+      folder: "attack/"
+      steps:
+        - action: "Error-based probing"
+          payload: "'"
+          result: "Pesan error SQL mentah ter-expose (information disclosure)"
+        - action: "Authentication/data bypass"
+          payload: "' OR '1'='1"
+          result: "Seluruh 5 baris tabel users berhasil dibocorkan"
+      note: >
+        Payload bypass (OR 1=1) tidak memicu rule response-based karena
+        tidak menghasilkan pesan error; hanya payload yang memicu error
+        SQL murni yang cocok dengan signature "SQL syntax".
+
+    - phase: "4. Exploitation — Webshell Upload"
+      folder: "attack/"
+      steps:
+        - action: "Unrestricted file upload"
+          detail: "File shell.php (bukan gambar) berhasil diupload tanpa validasi tipe/ekstensi"
+          evidence_path: "DVWA hackable/uploads/shell.php"
+        - action: "Remote Code Execution via webshell"
+          command: "GET /dvwa/hackable/uploads/shell.php?cmd=id"
+          result: "uid=33(www-data) gid=33(www-data) groups=33(www-data)"
+
+    - phase: "5. Detection & Analysis"
+      folder: "detection/"
+      findings:
+        - finding: "Filter dashboard awal kosong"
+          resolution: "Bukan masalah data — payload bypass memang tidak menghasilkan jejak error untuk dideteksi"
+        - finding: "SQLi tidak terdeteksi meski rule tersedia di ruleset"
+          root_cause: >
+            EXTERNAL_NET didefinisikan sebagai '!$HOME_NET', sementara HOME_NET
+            mencakup seluruh range lab (192.168.0.0/16) — tidak ada IP yang
+            dianggap "eksternal", sehingga rule request/response-based SQLi
+            tidak pernah match.
+          fix: "EXTERNAL_NET diubah menjadi 'any' di suricata.yaml"
+        - finding: "Setelah fix, hanya payload error-based yang terdeteksi"
+          explanation: >
+            Rule response-based mencari literal teks error MySQL di response.
+            Payload bypass (OR 1=1) menghasilkan response normal (status 200,
+            data valid) tanpa jejak error — sehingga TIDAK terdeteksi meski
+            serangan ini justru yang paling "berhasil" (membocorkan seluruh
+            data). Ini menunjukkan keterbatasan response-based detection:
+            serangan yang paling mulus justru paling sulit dideteksi dengan
+            pendekatan ini.
+        - finding: "Webshell upload & eksekusi tidak terdeteksi ruleset default"
+          root_cause: >
+            Request upload dan eksekusi command terlihat seperti traffic HTTP
+            normal bagi rule generik Emerging Threats — tidak ada signature
+            default yang spesifik mengenali pola "file .php diakses dari
+            folder upload".
+          fix: "Custom rule SID 9000001 dibuat"
+        - finding: "Custom rule pertama gagal ter-load"
+          root_cause: >
+            File local.rules ditulis di /etc/suricata/rules/, sementara
+            Suricata mencari file rule relatif terhadap default-rule-path
+            (/var/lib/suricata/rules/) — lokasi berbeda menyebabkan file
+            tidak pernah ditemukan ("No rule files match the pattern").
+          fix: "File dipindahkan ke /var/lib/suricata/rules/, folder lama dihapus"
+          result: "Custom rule langsung berfungsi tanpa perubahan syntax"
+
+    - phase: "6. Containment & Eradication"
+      folder: "response/"
+      steps:
+        - action: "Eradication — hapus webshell"
+          actor: "Defender, via akses SSH legitimate (bukan via webshell attacker)"
+          command: "ssh msfadmin@192.168.56.112 -> sudo rm /var/www/dvwa/hackable/uploads/shell.php"
+          verification: "GET ke URL webshell menghasilkan 404 Not Found"
+        - action: "Containment — block IP attacker"
+          command: "sudo iptables -A INPUT -s 192.168.56.102 -j DROP"
+          verification: "Ping dari Kali ke Metasploitable2 gagal (timeout)"
+      note_on_order: >
+        Urutan eksekusi aktual: eradication dilakukan sebelum containment
+        (terbalik dari urutan ideal). Lihat Lessons Learned.
+
+    - phase: "7. Recovery"
+      status: "pending"
+      planned_steps:
+        - "Restore security level DVWA ke kondisi aman atau nonaktifkan aplikasi vulnerable"
+        - "Audit log web server untuk aktivitas lanjutan pasca-webshell"
+        - "Unblock IP setelah investigasi selesai (lab context)"
+
+  lessons_learned:
+    - "Response-based SQLi detection punya blind spot signifikan: serangan yang paling berhasil (tidak menimbulkan error) justru paling sulit dideteksi dengan pendekatan ini."
+    - "Ruleset default (Emerging Threats Open) tidak otomatis mencakup pola serangan spesifik terhadap aplikasi custom (seperti file upload vulnerability) — custom rule tetap diperlukan untuk coverage yang memadai."
+    - "Definisi HOME_NET/EXTERNAL_NET yang terlalu luas dapat membuat seluruh rule yang bergantung pada EXTERNAL_NET tidak pernah ter-trigger di lingkungan lab dengan satu segmen jaringan — penting divalidasi sejak awal setup."
+    - "Lokasi file rule custom Suricata harus sesuai dengan default-rule-path; mendaftarkan file di rule-files saja tidak cukup jika path-nya tidak sesuai."
+    - "Urutan ideal containment adalah memutus akses baru (block IP) SEBELUM melakukan eradication, untuk mencegah celah waktu yang memungkinkan attacker menanam ulang payload. Urutan ini tidak diikuti pada eksekusi skenario ini (eradication dilakukan lebih dulu) — dicatat sebagai area perbaikan prosedur, meski dampaknya tidak signifikan dalam konteks lab terkendali."
+    - "Promiscuous mode yang dikonfigurasi di level hypervisor (VirtualBox) tidak otomatis diteruskan ke level OS tamu — perlu diaktifkan eksplisit dan dibuat persisten melalui systemd service terpisah."
