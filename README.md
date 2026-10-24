@@ -39,7 +39,6 @@ incident-response-playbook/
 ├── notes/
 │   └── SOP-startup-troubleshooting.md
 └── writeup/
-    ├── README.md
     ├── scenario-01/
     │   ├── 01-reconnaissance-and-setup.md
     │   ├── 02-exploitation.md
