@@ -1,4 +1,4 @@
-# Incident Response Playbook — Home Lab
+# Incident Response Playbook - Home Lab
 
 A self-built home lab project simulating end-to-end incident response workflows using Wazuh SIEM/EDR and Suricata IDS.
 
@@ -10,20 +10,18 @@ Project ini mensimulasikan siklus penuh Incident Response (Detection → Analysi
 
 ## Tech Stack & Tools
 
-- **Wazuh** — SIEM/EDR untuk host-based log analysis, correlation rules, dan active response
-- **Suricata** — Network IDS untuk deteksi berbasis traffic, termasuk custom signature
-- **VirtualBox** — Virtualisasi seluruh lab (attacker, victim, monitoring)
-- **Kali Linux** — Platform serangan (Nmap, Hydra)
-- **DVWA & Metasploitable2** — Target aplikasi dan sistem yang sengaja rentan
-- **Bash, jq, iptables** — Investigasi, analisis log, dan containment manual
+- **Wazuh** : SIEM/EDR untuk host-based log analysis, correlation rules, dan active response
+- **Suricata** : Network IDS untuk deteksi berbasis traffic, termasuk custom signature
+- **VirtualBox** : Virtualisasi seluruh lab (attacker, victim, monitoring)
+- **Kali Linux** : Platform serangan (Nmap, Hydra)
+- **DVWA & Metasploitable2** : Target aplikasi dan sistem yang sengaja rentan
+- **Bash, jq, iptables** : Investigasi, analisis log, dan containment manual
 
 ## Struktur Folder
 
 ```
 incident-response-playbook/
-│
 ├── README.md
-│
 ├── docs/
 │   ├── setup/
 │   ├── scenario-01-bruteforce/
@@ -35,25 +33,19 @@ incident-response-playbook/
 │       ├── attack/
 │       ├── detection/
 │       └── response/
-│
 ├── playbooks/
 │   ├── playbook-bruteforce.yml
 │   └── playbook-webapp.yml
-│
 ├── notes/
-│   ├── SOP-startup-troubleshooting.md
-│   └── troubleshooting.md
-│
+│   └── SOP-startup-troubleshooting.md
 └── writeup/
     ├── README.md
     ├── scenario-01/
-    │   ├── README.md
     │   ├── 01-reconnaissance-and-setup.md
     │   ├── 02-exploitation.md
     │   ├── 03-detection-and-analysis.md
     │   └── 04-root-cause-and-remediation.md
     └── scenario-02/
-        ├── README.md
         ├── 01-infrastructure-and-reconnaissance.md
         ├── 02-exploitation.md
         └── 03-detection-and-remediation.md
@@ -63,15 +55,15 @@ incident-response-playbook/
 
 | Fase | Status |
 |---|---|
-| Skenario 1 — SSH Brute Force | ✅ Selesai |
-| Skenario 2 — Web Application Attack (SQLi + Webshell) | ✅ Selesai |
-| Skenario 3 — Simulated Ransomware/Malware | ⬜ Belum dimulai |
+| Skenario 1 : SSH Brute Force | ✅ Selesai |
+| Skenario 2 : Web Application Attack (SQLi + Webshell) | ✅ Selesai |
+| Skenario 3 : Simulated Ransomware/Malware | ⬜ Belum dimulai |
 
 **Progress keseluruhan: ~88%**
 
 ## Dokumentasi
 
-Writeup lengkap tersedia di folder `writeup/` — lihat [`writeup/README.md`](writeup/README.md) untuk navigasi per skenario. SOP operasional dan panduan troubleshooting lab tersedia di [`notes/SOP-startup-troubleshooting.md`](notes/SOP-startup-troubleshooting.md).
+Writeup lengkap tersedia di folder `writeup/` lihat [`writeup/README.md`](writeup/README.md) untuk navigasi per skenario. SOP operasional dan panduan troubleshooting lab tersedia di [`notes/SOP-startup-troubleshooting.md`](notes/SOP-startup-troubleshooting.md).
 
 ## Disclaimer
 
